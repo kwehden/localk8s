@@ -14,7 +14,12 @@ Initial script/role skeletons now exist in:
 - `ansible/roles/k3s_agent/tasks/main.yml`
 - `ansible/roles/node_gpu_runtime/tasks/main.yml`
 
-These are safe placeholders and intentionally avoid full destructive host mutation until later tasks are approved.
+Current `NODE-TASK-002` behavior:
+- installs/configures k3s agent on target host
+- waits for node registration + `Ready` condition
+- applies configured labels/taints via `kubectl`
+
+`NODE-TASK-003` and `NODE-TASK-004` still include placeholder portions for GPU/runtime uninstall ownership scoping.
 
 ## Inventory Contract
 Use [inventory.example.ini](./inventory.example.ini) as the template.
@@ -25,6 +30,7 @@ Required host-level fields:
 
 Common optional fields:
 - `localk8s_gpu_enable` (`true`/`false`)
+- `localk8s_node_name` (explicit Kubernetes node name override; defaults to remote `hostname -s`)
 - `localk8s_node_labels` (comma-separated `key=value`)
 - `localk8s_node_taints` (comma-separated `key=value:Effect`)
 - `localk8s_allow_control_plane_remove` (`false` by default)
@@ -32,6 +38,8 @@ Common optional fields:
 Required group-level fields (`[node_join_targets:vars]`):
 - `localk8s_k3s_url` (example: `https://laminarflow:6443`)
 - `ansible_become=true`
+
+Join workflow also consumes pinned `K3S_VERSION` from `config/versions.env` (or `K3S_VERSION` env override).
 
 ## Secure Token Input Pattern
 Do not store tokens in tracked files.
