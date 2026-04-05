@@ -23,6 +23,7 @@
   become: true
   gather_facts: true
   vars:
+    k3s_version: "{{ lookup('env', 'K3S_VERSION') | default('', true) }}"
     k3s_server_url: "{{ lookup('env', 'K3S_SERVER_URL') | default('', true) }}"
     k3s_server_token: "{{ lookup('env', 'K3S_SERVER_TOKEN') | default('', true) }}"
     node_join_target: "{{ lookup('env', 'NODE_JOIN_TARGET') | default('', true) }}"

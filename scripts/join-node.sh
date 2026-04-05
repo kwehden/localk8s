@@ -5,11 +5,15 @@ SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ANSIBLE_DIR="${PROJECT_ROOT}/ansible"
+VERSIONS_CONFIG_FILE="${PROJECT_ROOT}/config/versions.env"
+KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+JOIN_READY_TIMEOUT_SECONDS="${JOIN_READY_TIMEOUT_SECONDS:-300}"
 
 TARGET_HOST=""
 K3S_SERVER_URL="${K3S_URL:-}"
 K3S_SERVER_TOKEN="${K3S_JOIN_TOKEN:-${K3S_TOKEN:-}}"
 INVENTORY_PATH="${PROJECT_ROOT}/packages/node-join/inventory.example.ini"
+K3S_VERSION="${K3S_VERSION:-}"
 GPU_MODE="skip"
 EXTRA_ANSIBLE_ARGS=()
 
@@ -24,11 +28,11 @@ die() {
 
 usage() {
   cat <<USAGE
-Usage: ${SCRIPT_NAME} --target <host> --k3s-url <url> [--inventory <path>] [--gpu] [-- <extra ansible args>]
+Usage: ${SCRIPT_NAME} --target <host> [--k3s-url <url>] [--inventory <path>] [--gpu] [-- <extra ansible args>]
 
 Options:
   --target <host>      Inventory host to configure (required)
-  --k3s-url <url>      k3s server URL (required; may use K3S_URL env)
+  --k3s-url <url>      k3s server URL (optional if K3S_URL env or inventory var localk8s_k3s_url is set)
   --inventory <path>   Ansible inventory path (default: packages/node-join/inventory.example.ini)
   --gpu                Enable node GPU runtime role for target host
   -h, --help           Show this help text
@@ -81,6 +85,19 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+load_versions() {
+  local env_k3s_version="${K3S_VERSION:-}"
+  [[ -f "${VERSIONS_CONFIG_FILE}" ]] || die "Missing versions config: ${VERSIONS_CONFIG_FILE}"
+
+  # shellcheck disable=SC1090
+  source "${VERSIONS_CONFIG_FILE}"
+  if [[ -n "${env_k3s_version}" ]]; then
+    K3S_VERSION="${env_k3s_version}"
+  fi
+
+  [[ -n "${K3S_VERSION:-}" ]] || die "K3S_VERSION is required (config/versions.env or env override)"
+}
+
 prompt_for_token_if_needed() {
   if [[ -n "${K3S_SERVER_TOKEN}" ]]; then
     return
@@ -89,6 +106,25 @@ prompt_for_token_if_needed() {
   read -r -s -p "Enter k3s join token: " K3S_SERVER_TOKEN
   printf '\n'
   [[ -n "${K3S_SERVER_TOKEN}" ]] || die "k3s server token is required"
+}
+
+resolve_k3s_url_from_inventory() {
+  local inventory_json
+  inventory_json="$(ansible-inventory -i "${INVENTORY_PATH}" --list)"
+  jq -r '.node_join_targets.vars.localk8s_k3s_url // empty' <<<"${inventory_json}"
+}
+
+get_host_inventory_var() {
+  local var_name="$1"
+  ansible-inventory -i "${INVENTORY_PATH}" --host "${TARGET_HOST}" 2>/dev/null \
+    | jq -r --arg key "${var_name}" '.[$key] // empty'
+}
+
+trim_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s\n' "${value}"
 }
 
 assert_inventory_contract() {
@@ -133,10 +169,7 @@ resolve_host_port_from_url() {
 
 resolve_worker_host_address() {
   local host_value
-  host_value="$(
-    ansible-inventory -i "${INVENTORY_PATH}" --host "${TARGET_HOST}" 2>/dev/null \
-      | jq -r '.ansible_host // empty'
-  )"
+  host_value="$(get_host_inventory_var ansible_host)"
 
   if [[ -z "${host_value}" || "${host_value}" == "null" ]]; then
     host_value="${TARGET_HOST}"
@@ -173,20 +206,24 @@ preflight() {
   local server_host
   local server_port
 
-  prompt_for_token_if_needed
-
   require_cmd ansible
   require_cmd ansible-playbook
   require_cmd ansible-inventory
   require_cmd bash
   require_cmd jq
+  require_cmd kubectl
   require_cmd timeout
+  load_versions
 
   [[ -n "${TARGET_HOST}" ]] || die "--target is required"
-  [[ -n "${K3S_SERVER_URL}" ]] || die "k3s server URL is required (--k3s-url or K3S_URL)"
   [[ -d "${ANSIBLE_DIR}" ]] || die "Ansible directory not found: ${ANSIBLE_DIR}"
   [[ -f "${INVENTORY_PATH}" ]] || die "Inventory not found: ${INVENTORY_PATH}"
   assert_inventory_contract
+  if [[ -z "${K3S_SERVER_URL}" ]]; then
+    K3S_SERVER_URL="$(resolve_k3s_url_from_inventory)"
+  fi
+  [[ -n "${K3S_SERVER_URL}" ]] || die "k3s server URL is required (--k3s-url, K3S_URL, or inventory var localk8s_k3s_url)"
+  prompt_for_token_if_needed
 
   resolve_host_port_from_url "${K3S_SERVER_URL}" server_host server_port
 
@@ -194,7 +231,6 @@ preflight() {
     || die "Cannot reach k3s API endpoint ${server_host}:${server_port}"
 
   run_remote_preflight "${server_host}" "${server_port}"
-
 }
 
 run_join() {
@@ -217,6 +253,7 @@ run_join() {
 
   log "Running node join for target ${TARGET_HOST} (gpu_mode=${GPU_MODE})"
   (
+    export K3S_VERSION
     export K3S_SERVER_URL
     export K3S_SERVER_TOKEN
     export NODE_JOIN_TARGET="${TARGET_HOST}"
@@ -225,6 +262,75 @@ run_join() {
     cd "${ANSIBLE_DIR}"
     "${ansible_cmd[@]}"
   )
+}
+
+resolve_node_name() {
+  local inventory_node_name
+  local discovered_node_name
+
+  inventory_node_name="$(get_host_inventory_var localk8s_node_name)"
+  if [[ -n "${inventory_node_name}" ]]; then
+    printf '%s\n' "${inventory_node_name}"
+    return
+  fi
+
+  discovered_node_name="$(
+    ansible -i "${INVENTORY_PATH}" "${TARGET_HOST}" -m shell -a "hostname -s" -o 2>/dev/null \
+      | sed -E 's/^.*>>[[:space:]]*//'
+  )"
+  discovered_node_name="$(trim_whitespace "${discovered_node_name}")"
+  [[ -n "${discovered_node_name}" ]] || die "Unable to resolve Kubernetes node name from target host ${TARGET_HOST}"
+  printf '%s\n' "${discovered_node_name}"
+}
+
+wait_for_node_ready() {
+  local node_name="$1"
+  local waited=0
+
+  log "Waiting for node registration: ${node_name}"
+  until kubectl --kubeconfig "${KUBECONFIG_PATH}" get node "${node_name}" >/dev/null 2>&1; do
+    sleep 5
+    waited=$((waited + 5))
+    if [[ "${waited}" -ge "${JOIN_READY_TIMEOUT_SECONDS}" ]]; then
+      die "Timed out waiting for node registration: ${node_name}"
+    fi
+  done
+
+  log "Waiting for node Ready condition: ${node_name}"
+  kubectl --kubeconfig "${KUBECONFIG_PATH}" wait \
+    --for=condition=Ready "node/${node_name}" \
+    --timeout="${JOIN_READY_TIMEOUT_SECONDS}s" >/dev/null \
+    || die "Timed out waiting for node Ready condition: ${node_name}"
+}
+
+apply_node_labels_and_taints() {
+  local node_name="$1"
+  local labels_raw taints_raw
+  local label taint
+  local -a labels taints
+
+  labels_raw="$(get_host_inventory_var localk8s_node_labels)"
+  taints_raw="$(get_host_inventory_var localk8s_node_taints)"
+
+  if [[ -n "${labels_raw}" ]]; then
+    IFS=',' read -r -a labels <<<"${labels_raw}"
+    for label in "${labels[@]}"; do
+      label="$(trim_whitespace "${label}")"
+      [[ -n "${label}" ]] || continue
+      log "Applying node label ${label} on ${node_name}"
+      kubectl --kubeconfig "${KUBECONFIG_PATH}" label node "${node_name}" "${label}" --overwrite >/dev/null
+    done
+  fi
+
+  if [[ -n "${taints_raw}" ]]; then
+    IFS=',' read -r -a taints <<<"${taints_raw}"
+    for taint in "${taints[@]}"; do
+      taint="$(trim_whitespace "${taint}")"
+      [[ -n "${taint}" ]] || continue
+      log "Applying node taint ${taint} on ${node_name}"
+      kubectl --kubeconfig "${KUBECONFIG_PATH}" taint node "${node_name}" "${taint}" --overwrite >/dev/null
+    done
+  fi
 }
 
 post_join_network_check() {
@@ -237,9 +343,14 @@ post_join_network_check() {
 }
 
 main() {
+  local node_name
+
   parse_args "$@"
   preflight
   run_join
+  node_name="$(resolve_node_name)"
+  wait_for_node_ready "${node_name}"
+  apply_node_labels_and_taints "${node_name}"
   post_join_network_check
   log "Join workflow completed"
 }
