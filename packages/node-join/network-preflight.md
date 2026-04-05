@@ -4,9 +4,13 @@ This preflight applies before attempting `k3s` agent join.
 
 ## Required Paths
 1. Worker -> control-plane (`laminarflow`) `tcp/6443` (k3s API).
-2. Worker -> control-plane CNI data-plane probe (current default: flannel VXLAN `udp/8472` best-effort probe).
 
-If any required path fails, join must stop with actionable diagnostics.
+If required path checks fail, join must stop with actionable diagnostics.
+
+## Best-Effort Probe
+2. Worker -> control-plane CNI data-plane probe (current default: flannel VXLAN `udp/8472`).
+
+This probe is advisory because UDP probes can be inconclusive. Failures should emit warnings and remediation guidance, not always hard-stop join.
 
 ## Post-Join Required Path
 3. Control-plane -> worker kubelet path `tcp/10250`.

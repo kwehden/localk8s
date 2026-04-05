@@ -48,6 +48,7 @@ Logging requirements:
 See [network-preflight.md](./network-preflight.md).
 
 At minimum, preflight must fail if required control-plane/data-plane paths are unavailable.
+Best-effort probes (for example UDP VXLAN probes) may warn without hard-failing join preflight.
 
 ## Ownership Registry Contract
 See [ownership-registry.md](./ownership-registry.md).

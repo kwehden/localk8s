@@ -9,7 +9,7 @@ KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
 TARGET_NODE=""
 TARGET_HOST=""
-INVENTORY_PATH="${PROJECT_ROOT}/ansible/inventory/localhost.yml"
+INVENTORY_PATH="${PROJECT_ROOT}/packages/node-join/inventory.example.ini"
 ALLOW_CONTROL_PLANE_REMOVE="false"
 EXTRA_ANSIBLE_ARGS=()
 
@@ -29,7 +29,7 @@ Usage: ${SCRIPT_NAME} --node <k8s-node-name> --target <inventory-host> [--invent
 Options:
   --node <name>                   Kubernetes node name to remove (required)
   --target <host>                 Inventory host/group used for host-side uninstall (required)
-  --inventory <path>              Ansible inventory path (default: ansible/inventory/localhost.yml)
+  --inventory <path>              Ansible inventory path (default: packages/node-join/inventory.example.ini)
   --allow-control-plane-remove    Explicitly allow targeting control-plane node (dangerous)
   -h, --help                      Show this help text
 USAGE
@@ -77,14 +77,28 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+assert_inventory_contract() {
+  local inventory_json
+  inventory_json="$(ansible-inventory -i "${INVENTORY_PATH}" --list)"
+
+  jq -e '.node_join_targets' >/dev/null <<<"${inventory_json}" \
+    || die "Inventory must define group: node_join_targets"
+
+  jq -e --arg target "${TARGET_HOST}" '.node_join_targets.hosts // [] | index($target) != null' >/dev/null <<<"${inventory_json}" \
+    || die "Target host '${TARGET_HOST}' not found under group node_join_targets in inventory ${INVENTORY_PATH}"
+}
+
 preflight() {
   require_cmd kubectl
   require_cmd ansible-playbook
+  require_cmd ansible-inventory
   require_cmd bash
+  require_cmd jq
 
   [[ -n "${TARGET_NODE}" ]] || die "--node is required"
   [[ -n "${TARGET_HOST}" ]] || die "--target is required"
   [[ -f "${INVENTORY_PATH}" ]] || die "Inventory not found: ${INVENTORY_PATH}"
+  assert_inventory_contract
 
   kubectl --kubeconfig "${KUBECONFIG_PATH}" get node "${TARGET_NODE}" >/dev/null 2>&1 || die "Node not found: ${TARGET_NODE}"
 }
@@ -105,11 +119,13 @@ run_kubectl_removal() {
   kubectl --kubeconfig "${KUBECONFIG_PATH}" cordon "${TARGET_NODE}" || true
 
   log "Draining ${TARGET_NODE}"
-  kubectl --kubeconfig "${KUBECONFIG_PATH}" drain "${TARGET_NODE}" \
+  if ! kubectl --kubeconfig "${KUBECONFIG_PATH}" drain "${TARGET_NODE}" \
     --ignore-daemonsets \
     --delete-emptydir-data \
     --grace-period=30 \
-    --timeout=180s
+    --timeout=180s; then
+    die "Drain failed for ${TARGET_NODE}. Resolve blocking workloads/PDBs and retry (manual fallback: kubectl drain ... --force or --disable-eviction when appropriate)."
+  fi
 
   log "Deleting node object ${TARGET_NODE}"
   kubectl --kubeconfig "${KUBECONFIG_PATH}" delete node "${TARGET_NODE}"
