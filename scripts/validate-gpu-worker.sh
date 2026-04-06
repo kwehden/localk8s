@@ -188,6 +188,7 @@ metadata:
     app.kubernetes.io/name: localk8s-gpu-canary
 spec:
   restartPolicy: Never
+  runtimeClassName: nvidia
   nodeSelector:
     kubernetes.io/hostname: "${TARGET_NODE}"
   containers:
