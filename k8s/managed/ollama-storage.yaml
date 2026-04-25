@@ -1,3 +1,14 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ollama-host-disk
+  labels:
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+provisioner: kubernetes.io/no-provisioner
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
@@ -8,12 +19,66 @@ metadata:
     app.kubernetes.io/part-of: localk8s
 spec:
   capacity:
-    storage: 400Gi
+    storage: 200Gi
   accessModes:
     - ReadWriteOnce
   volumeMode: Filesystem
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ollama-host-disk
   hostPath:
-    path: /mnt/ollama-models
+    path: /mnt/ollama-models/ollama
     type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-backdraft-models-pv
+  labels:
+    app.kubernetes.io/name: ollama-backdraft
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  capacity:
+    storage: 200Gi
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ollama-host-disk
+  local:
+    path: /var/lib/localk8s/ollama-models
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - backdraft
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-flenser-models-pv
+  labels:
+    app.kubernetes.io/name: ollama-flenser
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ollama-host-disk
+  local:
+    path: /var/lib/localk8s/ollama-models
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - flenser

@@ -53,9 +53,11 @@ check_ray_pods() {
 }
 
 check_ollama() {
-  kubectl --kubeconfig "${KUBECONFIG_PATH}" get pv ollama-models-pv
+  kubectl --kubeconfig "${KUBECONFIG_PATH}" get pv ollama-models-pv kuzu-graph-state-pv
   kubectl --kubeconfig "${KUBECONFIG_PATH}" get pvc -n ollama
   kubectl --kubeconfig "${KUBECONFIG_PATH}" wait --for=jsonpath='{.status.phase}'=Bound pvc/ollama-models-hostdisk -n ollama --timeout=180s
+  kubectl --kubeconfig "${KUBECONFIG_PATH}" get pvc -n kuzu
+  kubectl --kubeconfig "${KUBECONFIG_PATH}" wait --for=jsonpath='{.status.phase}'=Bound pvc/kuzu-graph-state-hostdisk -n kuzu --timeout=180s
   kubectl --kubeconfig "${KUBECONFIG_PATH}" get deploy,svc,pods -n ollama
   kubectl --kubeconfig "${KUBECONFIG_PATH}" wait --for=condition=Available deployment/ollama -n ollama --timeout=180s
 }

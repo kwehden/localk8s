@@ -15,6 +15,7 @@ affinity:
               operator: NotIn
               values:
                 - cpu
+                - amd-gpu
 runtimeClassName: nvidia
 
 config:

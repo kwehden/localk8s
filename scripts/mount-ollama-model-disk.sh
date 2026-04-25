@@ -68,6 +68,10 @@ main() {
 
   run_root chmod 0775 "${MOUNT_POINT}"
 
+  log "ensuring Ollama subpath on model disk (Day-0 layout; excludes Kuzu on workers)"
+  run_root mkdir -p "${MOUNT_POINT}/ollama"
+  run_root chmod 0775 "${MOUNT_POINT}/ollama"
+
   log "mount ready:"
   findmnt "${MOUNT_POINT}"
 }

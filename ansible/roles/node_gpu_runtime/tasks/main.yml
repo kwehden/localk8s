@@ -16,8 +16,8 @@
 - name: Validate node GPU runtime mode
   ansible.builtin.assert:
     that:
-      - node_gpu_runtime_mode in ['enable', 'skip', 'uninstall']
-    fail_msg: "node_gpu_runtime_mode must be one of: enable, skip, uninstall"
+      - node_gpu_runtime_mode in ['enable', 'amd', 'skip', 'uninstall']
+    fail_msg: "node_gpu_runtime_mode must be one of: enable, amd, skip, uninstall"
 
 - name: Verify NVIDIA GPU visibility on host
   ansible.builtin.command: nvidia-smi -L
@@ -116,14 +116,30 @@
   register: node_gpu_runtime_rendered_stat
   when: node_gpu_runtime_mode == 'enable'
 
+- name: Bootstrap containerd template from rendered config when template is absent
+  # k3s v1.33+ writes config.toml directly without generating config.toml.tmpl.
+  # Copy the rendered config as the template so nvidia-ctk has a stable file to patch,
+  # and so k3s will use it as the base on subsequent restarts.
+  ansible.builtin.copy:
+    src: "{{ node_gpu_runtime_config_rendered }}"
+    dest: "{{ node_gpu_runtime_config_template }}"
+    remote_src: true
+    mode: "0644"
+  when:
+    - node_gpu_runtime_mode == 'enable'
+    - not node_gpu_runtime_template_stat.stat.exists
+    - node_gpu_runtime_rendered_stat.stat.exists
+
 - name: Fail if k3s agent containerd template is missing
   ansible.builtin.fail:
     msg: >-
-      k3s agent containerd template was not found at {{ node_gpu_runtime_config_template }}.
+      k3s agent containerd template was not found at {{ node_gpu_runtime_config_template }}
+      and no rendered config exists at {{ node_gpu_runtime_config_rendered }} to bootstrap from.
       Ensure the k3s agent install completed before enabling GPU runtime.
   when:
     - node_gpu_runtime_mode == 'enable'
     - not node_gpu_runtime_template_stat.stat.exists
+    - not node_gpu_runtime_rendered_stat.stat.exists
 
 - name: Configure k3s agent containerd template for NVIDIA runtime
   ansible.builtin.shell: |
@@ -154,10 +170,16 @@
 - name: Verify k3s agent containerd template includes NVIDIA runtime
   ansible.builtin.shell: |
     set -euo pipefail
+    # k3s v1.33+ may expose runtime handlers via runtime metadata even when
+    # config files do not contain legacy nvidia-ctk markers.
+    if k3s crictl info 2>/dev/null | grep -Eq '"nvidia"[[:space:]]*:'; then
+      exit 0
+    fi
+
     check_runtime_config() {
       local config_path="$1"
       [[ -f "${config_path}" ]] || return 1
-      grep -Eq 'runtimes\.nvidia|nvidia-container-runtime|nvidia-ctk' "${config_path}"
+      grep -Eq 'runtimes\."?nvidia"?|nvidia-container-runtime|nvidia-ctk' "${config_path}"
     }
 
     check_runtime_config "{{ node_gpu_runtime_config_template }}" && exit 0
@@ -186,3 +208,47 @@
       GPU runtime ownership cleanup will be handled by a dedicated ownership-registry-aware
       uninstall workflow before any package or config removal is added here.
   when: node_gpu_runtime_mode == 'uninstall'
+
+# ── AMD ROCm GPU runtime ──────────────────────────────────────────────────────
+# AMD GPU runtime requires only the amdgpu kernel module on the host (/dev/kfd).
+# ROCm libraries are bundled in the ollama:rocm container image.
+# The AMD k8s-device-plugin DaemonSet (k8s/managed/amd-gpu-device-plugin.yaml)
+# handles device injection — no containerd runtime config changes are needed.
+
+- name: Check AMD GPU kernel device node
+  ansible.builtin.stat:
+    path: /dev/kfd
+  register: node_gpu_runtime_kfd_stat
+  when: node_gpu_runtime_mode == 'amd'
+
+- name: Fail if AMD GPU kernel device node is absent
+  ansible.builtin.fail:
+    msg: >-
+      /dev/kfd not found on the host. The amdgpu kernel module must be loaded before
+      enabling AMD GPU runtime. Install the amdgpu driver and reboot, then re-run the join workflow.
+  when:
+    - node_gpu_runtime_mode == 'amd'
+    - not node_gpu_runtime_kfd_stat.stat.exists
+
+- name: Verify AMD render device nodes are present
+  ansible.builtin.shell: ls /dev/dri/renderD* 2>/dev/null | head -1
+  register: node_gpu_runtime_render_check
+  changed_when: false
+  failed_when: false
+  when: node_gpu_runtime_mode == 'amd'
+
+- name: Warn if no DRI render nodes found
+  ansible.builtin.debug:
+    msg: >-
+      No /dev/dri/renderD* devices found. GPU workloads may fail.
+      Verify amdgpu is loaded and the GPU is recognized by the kernel.
+  when:
+    - node_gpu_runtime_mode == 'amd'
+    - node_gpu_runtime_render_check.stdout == ''
+
+- name: Ensure /var/lib/localk8s/ollama-models directory exists
+  ansible.builtin.file:
+    path: /var/lib/localk8s/ollama-models
+    state: directory
+    mode: "0755"
+  when: node_gpu_runtime_mode == 'amd'

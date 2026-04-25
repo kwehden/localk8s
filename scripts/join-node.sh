@@ -31,13 +31,14 @@ die() {
 
 usage() {
   cat <<USAGE
-Usage: ${SCRIPT_NAME} --target <host> [--k3s-url <url>] [--inventory <path>] [--gpu] [-- <extra ansible args>]
+Usage: ${SCRIPT_NAME} --target <host> [--k3s-url <url>] [--inventory <path>] [--gpu] [--amd-gpu] [-- <extra ansible args>]
 
 Options:
   --target <host>      Inventory host to configure (required)
   --k3s-url <url>      k3s server URL (optional if K3S_URL env or inventory var localk8s_k3s_url is set)
   --inventory <path>   Ansible inventory path (default: packages/node-join/inventory.example.ini)
-  --gpu                Backward-compatible shortcut: force gpu node profile and enable GPU runtime role
+  --gpu                Backward-compatible shortcut: force gpu node profile and enable NVIDIA GPU runtime role
+  --amd-gpu            Force amd-gpu node profile and enable AMD ROCm GPU runtime role
   -h, --help           Show this help text
 
 Examples:
@@ -67,6 +68,11 @@ parse_args() {
       --gpu)
         GPU_MODE="enable"
         NODE_PROFILE_OVERRIDE="gpu"
+        shift
+        ;;
+      --amd-gpu)
+        GPU_MODE="amd"
+        NODE_PROFILE_OVERRIDE="amd-gpu"
         shift
         ;;
       --)
@@ -174,9 +180,9 @@ resolve_node_profile() {
   fi
 
   case "${effective_profile}" in
-    cpu|gpu) ;;
+    cpu|gpu|amd-gpu) ;;
     *)
-      die "Invalid localk8s_node_profile '${effective_profile}' for target '${TARGET_HOST}'. Allowed values: cpu, gpu."
+      die "Invalid localk8s_node_profile '${effective_profile}' for target '${TARGET_HOST}'. Allowed values: cpu, gpu, amd-gpu."
       ;;
   esac
 
@@ -298,6 +304,9 @@ preflight() {
   NODE_PROFILE="$(resolve_node_profile)"
   if [[ "${GPU_MODE}" == "skip" && "${NODE_PROFILE}" == "gpu" ]]; then
     GPU_MODE="enable"
+  fi
+  if [[ "${GPU_MODE}" == "skip" && "${NODE_PROFILE}" == "amd-gpu" ]]; then
+    GPU_MODE="amd"
   fi
   if [[ -z "${K3S_SERVER_URL}" ]]; then
     K3S_SERVER_URL="$(resolve_k3s_url_from_inventory)"

@@ -82,6 +82,7 @@ sequenceDiagram
 - Storage:
   - Local-path storage class for lightweight PVCs.
   - Host directories for Ray logs and object spill paths.
+  - Ollama model disk: 200 Gi static hostPath PV under `/mnt/ollama-models/ollama` on the control-plane model mount; Kuzu graph files: 200 Gi `local` PV at `/var/lib/localk8s/kuzu` with node affinity to the `polecat` worker (see `k8s/managed/ollama-storage.yaml`, `k8s/managed/kuzu-storage.yaml`).
 - Ownership metadata:
   - Managed Kubernetes resources are tagged with an ownership label (for example `app.kubernetes.io/managed-by=localk8s-bootstrap`).
   - Managed host configuration files are maintained in a dedicated manifest/list consumed by bootstrap.

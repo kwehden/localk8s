@@ -29,7 +29,7 @@ It provisions and reconciles a control-plane host with NVIDIA runtime/device plu
 - Installs and reconciles a **k3s control-plane host**, with optional CPU/GPU worker expansion.
 - Supports optional **remote worker expansion** via scripted join/remove flows.
 - Enables **NVIDIA GPU scheduling** with time-slicing.
-- Deploys **KubeRay** and a hybrid `RayCluster` (`gpu-workers` + `cpu-workers`).
+- Deploys **KubeRay** and a hybrid `RayCluster` (`laminarflow-gpu-workers` + `cpu-workers` + `flenser-gpu-workers`).
 - Deploys **Ollama in-cluster** on GPU with persistent model storage.
 - Exposes gateway routes via Traefik:
   - `http://<your-local-hostname>/ray/`
@@ -105,6 +105,8 @@ If your model disk UUID or mount path differ, override:
 OLLAMA_MODEL_DISK_UUID=<your-disk-uuid> ./scripts/mount-ollama-model-disk.sh
 # optional: OLLAMA_MODEL_MOUNT_POINT=/mnt/ollama-models
 ```
+
+The mount script creates `/mnt/ollama-models/ollama` for in-cluster Ollama (200 Gi PV). Kuzu graph storage (200 Gi) is a separate local volume on the **`polecat` node** at `/var/lib/localk8s/kuzu` (see `k8s/managed/kuzu-storage.yaml`). If you already have models at the disk root, run `./scripts/migrate-ollama-model-subpath.sh` before reconciling the new PV.
 
 ### 4) Bootstrap everything
 

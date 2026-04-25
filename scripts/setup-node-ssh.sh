@@ -149,8 +149,8 @@ parse_args() {
 
 validate_inputs() {
   case "${NODE_PROFILE}" in
-    cpu|gpu) ;;
-    *) die "--node-profile must be 'cpu' or 'gpu'" ;;
+    cpu|gpu|amd-gpu) ;;
+    *) die "--node-profile must be 'cpu', 'gpu', or 'amd-gpu'" ;;
   esac
 
   prompt_if_empty TARGET_NAME "Inventory target name (example: polecat)" "${TARGET_NAME}"
