@@ -52,8 +52,8 @@
 - name: Validate node profile input
   ansible.builtin.assert:
     that:
-      - k3s_agent_node_profile in ['cpu', 'gpu']
-    fail_msg: "localk8s_node_profile must be one of: cpu, gpu"
+      - k3s_agent_node_profile in ['cpu', 'gpu', 'amd-gpu']
+    fail_msg: "localk8s_node_profile must be one of: cpu, gpu, amd-gpu"
   when: k3s_agent_join_mode == 'join'
 
 - name: Build default node labels from profile
@@ -61,7 +61,7 @@
     k3s_agent_default_node_labels:
       - "localk8s.io/worker-class={{ k3s_agent_node_profile }}"
       - "localk8s.io/ray-eligible=true"
-      - "localk8s.io/ollama-eligible={{ 'true' if k3s_agent_node_profile == 'gpu' else 'false' }}"
+      - "localk8s.io/ollama-eligible={{ 'true' if k3s_agent_node_profile in ['gpu', 'amd-gpu'] else 'false' }}"
   when: k3s_agent_join_mode == 'join'
 
 - name: Assert custom labels do not override reserved profile-managed labels
@@ -85,6 +85,15 @@
     state: directory
     mode: "0755"
   when: k3s_agent_join_mode == 'join'
+
+- name: Ensure Kuzu local PV path exists on designated Kuzu host
+  ansible.builtin.file:
+    path: /var/lib/localk8s/kuzu
+    state: directory
+    mode: "0755"
+  when:
+    - k3s_agent_join_mode == 'join'
+    - k3s_agent_node_name == (localk8s_kuzu_host | default('polecat', true))
 
 - name: Render k3s agent config
   ansible.builtin.template:

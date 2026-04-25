@@ -26,8 +26,8 @@ metadata:
     app.kubernetes.io/part-of: localk8s
 spec:
   hard:
-    limits.cpu: "12"
-    limits.memory: 48Gi
-    requests.cpu: "6"
-    requests.memory: 24Gi
-    requests.nvidia.com/gpu: "2"
+    limits.cpu: "14"
+    limits.memory: 56Gi
+    requests.cpu: "7"
+    requests.memory: 28Gi
+    requests.nvidia.com/gpu: "3"

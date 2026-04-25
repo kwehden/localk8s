@@ -40,6 +40,20 @@ If migrating host Ollama to in-cluster:
 ./scripts/remove-host-ollama.sh
 ```
 
+### Model disk layout (200 Gi Ollama + 200 Gi Kuzu on polecat)
+
+- **Ollama** uses host PV `ollama-models-pv` → `/mnt/ollama-models/ollama` on the control-plane model disk (200 Gi).
+- **Kuzu** uses local PV `kuzu-graph-state-pv` → `/var/lib/localk8s/kuzu` on the **`polecat` worker only** (200 Gi). `k3s_agent` creates that directory on join; on an existing worker run: `sudo mkdir -p /var/lib/localk8s/kuzu && sudo chmod 0755 /var/lib/localk8s/kuzu`.
+- If the model disk already holds legacy paths (`/mnt/ollama-models/models`, etc.), run **before** applying the updated PV path:
+
+```bash
+./scripts/migrate-ollama-model-subpath.sh
+```
+
+Then replace stale PV/PVC objects if the cluster still references the old 400 Gi `/mnt/ollama-models` PV (see Kubernetes docs for `Retain` reclaim and data safety).
+
+If your worker’s Kubernetes node name is not `polecat`, patch `k8s/managed/kuzu-storage.yaml` `nodeAffinity` values to match `kubectl get nodes`.
+
 For controlled node removal, use:
 
 ```bash
@@ -75,7 +89,8 @@ kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
 kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml describe node "$(kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o jsonpath='{.items[0].metadata.name}')" | rg 'nvidia.com/gpu'
 kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get raycluster -n ray
 kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n ray get pods -l ray.io/group=cpu-workers -o wide
-kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n ray get pods -l ray.io/group=gpu-workers -o wide
+kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n ray get pods -l ray.io/group=flenser-gpu-workers -o wide
+kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n ray get pods -l ray.io/group=laminarflow-gpu-workers -o wide
 kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get pods -n ollama
 curl -fsS "http://${LOCAL_HOSTNAME:-$(hostname -s)}/ray/" >/dev/null
 curl -fsS "http://${LOCAL_HOSTNAME:-$(hostname -s)}/k3s/" >/dev/null

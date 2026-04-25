@@ -132,6 +132,20 @@ Execution order is mostly linear due to platform dependencies: establish host/ru
 - Rollback / Backout note: disable cleanup phase and fall back to apply-only mode until ownership boundaries are fixed.
 - Risk level: High (cleanup safety and ownership boundaries).
 
+### TASK-010
+- Goal: Split dedicated disk capacity into **200 Gi** Ollama models (control-plane model mount subpath) and **200 Gi** Kuzu graph state (**local** PV on `polecat`).
+- Files/areas expected to change: `k8s/managed/ollama-storage.yaml`, `k8s/managed/ollama.yaml`, `k8s/managed/kuzu-storage.yaml`, `config/managed-assets.env`, `scripts/mount-ollama-model-disk.sh`, `scripts/migrate-ollama-model-subpath.sh`, `scripts/healthcheck.sh`, `ansible/roles/k3s_agent/tasks/main.yml`, `docs/runbook.md`, `README.md`, `spec/{requirements,design}.md`.
+- Dependencies: TASK-002 (managed namespaces/config).
+- Recommended Mode: executor.
+- Steps:
+  1. Point Ollama PV hostPath at `/mnt/ollama-models/ollama` with 200 Gi; align PVC request.
+  2. Add `kuzu` namespace, local PV + PVC bound to `/var/lib/localk8s/kuzu` with node affinity to `polecat`.
+  3. Ensure agent join creates the Kuzu directory; document one-time Ollama subpath migration and PV replace notes.
+  4. Extend healthcheck for both PVCs.
+- Verification: `kubectl apply --dry-run=client -f k8s/managed/...`; `./scripts/healthcheck.sh` after live apply; optional `./scripts/migrate-ollama-model-subpath.sh` on upgraded hosts with legacy layout.
+- Rollback / Backout note: restore prior PV paths/capacities and remove `kuzu` manifests if Kuzu is deferred.
+- Risk level: Medium (data path change requires ordered migration on live clusters).
+
 ## Definition of Done Checklist
 - [ ] `spec/context.md`, `spec/requirements.md`, `spec/design.md`, and `spec/tasks.md` are approved.
 - [ ] Bootstrap script deploys k3s, NVIDIA plugin, and KubeRay without manual patching.
@@ -162,3 +176,4 @@ Execution order is mostly linear due to platform dependencies: establish host/ru
 - REQ-012 -> TASK-003, TASK-005, TASK-007
 - REQ-013 -> TASK-001, TASK-003, TASK-004
 - REQ-014 -> TASK-001, TASK-002
+- REQ-015 -> TASK-010

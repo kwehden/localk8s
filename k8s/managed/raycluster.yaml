@@ -37,7 +37,7 @@ spec:
               - containerPort: 10001
                 name: client
   workerGroupSpecs:
-    - groupName: gpu-workers
+    - groupName: laminarflow-gpu-workers
       replicas: 1
       minReplicas: 1
       maxReplicas: 2
@@ -49,6 +49,8 @@ spec:
             app.kubernetes.io/managed-by: localk8s-bootstrap
         spec:
           runtimeClassName: nvidia
+          nodeSelector:
+            kubernetes.io/hostname: laminarflow
           containers:
             - name: ray-worker
               image: rayproject/ray:2.47.1
@@ -87,3 +89,31 @@ spec:
                 requests:
                   cpu: "1"
                   memory: 4Gi
+    - groupName: flenser-gpu-workers
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 1
+      rayStartParams: {}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: local-ray-worker-flenser-gpu
+            app.kubernetes.io/managed-by: localk8s-bootstrap
+        spec:
+          runtimeClassName: nvidia
+          nodeSelector:
+            kubernetes.io/hostname: "flenser"
+            localk8s.io/ray-eligible: "true"
+          containers:
+            - name: ray-worker
+              image: rayproject/ray:2.47.1
+              imagePullPolicy: IfNotPresent
+              resources:
+                limits:
+                  cpu: "4"
+                  memory: 16Gi
+                  nvidia.com/gpu: "1"
+                requests:
+                  cpu: "2"
+                  memory: 8Gi
+                  nvidia.com/gpu: "1"

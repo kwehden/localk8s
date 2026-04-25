@@ -1,0 +1,65 @@
+# Kuzu graph database files: 200Gi local volume on the CPU worker (polecat).
+# PV nodeAffinity must match the Kubernetes node name where /var/lib/localk8s/kuzu exists.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kuzu-local-disk
+  labels:
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+provisioner: kubernetes.io/no-provisioner
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuzu
+  labels:
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kuzu-graph-state-pv
+  labels:
+    app.kubernetes.io/name: kuzu
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  capacity:
+    storage: 200Gi
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kuzu-local-disk
+  local:
+    path: /var/lib/localk8s/kuzu
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - polecat
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kuzu-graph-state-hostdisk
+  namespace: kuzu
+  labels:
+    app.kubernetes.io/name: kuzu
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: kuzu-local-disk
+  volumeName: kuzu-graph-state-pv
+  resources:
+    requests:
+      storage: 200Gi

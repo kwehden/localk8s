@@ -14,7 +14,7 @@ spec:
   volumeName: ollama-models-pv
   resources:
     requests:
-      storage: 300Gi
+      storage: 200Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -40,6 +40,23 @@ spec:
         app.kubernetes.io/part-of: localk8s
     spec:
       runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: wait-for-gpu
+          image: ubuntu:22.04
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for nvidia-smi...";
+              until nvidia-smi -L > /dev/null 2>&1; do
+                echo "GPU not ready, retrying in 5s...";
+                sleep 5;
+              done;
+              echo "GPU ready."
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
       containers:
         - name: ollama
           image: ollama/ollama:0.19.0
@@ -50,6 +67,7 @@ spec:
           ports:
             - name: http
               containerPort: 11434
+              hostPort: 11434
               protocol: TCP
           resources:
             requests:
@@ -83,16 +101,448 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: ollama
+  name: ollama-laminarflow
   namespace: ollama
   labels:
-    app.kubernetes.io/name: ollama
+    app.kubernetes.io/name: ollama-laminarflow
     app.kubernetes.io/managed-by: localk8s-bootstrap
     app.kubernetes.io/part-of: localk8s
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: ollama
+  ports:
+    - name: http
+      protocol: TCP
+      port: 11434
+      targetPort: 11434
+---
+# -- Backdraft M10 pool -------------------------------------------------------
+# Four Ollama pods, one per physical GPU (2 logical time-slices claimed per pod).
+# Shared RWO PVC is safe: all pods are on the same node (backdraft).
+# M10 is Maxwell sm_50 / CUDA 12.x / llama.cpp only. No PyTorch.
+#
+# Port map (hostPort = direct GPU-pinned access):
+#   ollama-backdraft-0  11434  gemma2:2b          (~1.6 GB)  fastest
+#   ollama-backdraft-1  11435  phi4-mini:3.8b     (~2.5 GB)  reasoning
+#   ollama-backdraft-2  11436  mistral:7b         (~4.4 GB)  balanced
+#   ollama-backdraft-3  11437  deepseek-r1:7b     (~4.7 GB)  chain-of-thought
+#
+# Load-balanced endpoint (round-robin across all four):
+#   Service ollama-backdraft  :11434  →  localk8s.io/ollama-pool=backdraft
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-backdraft-models-hostdisk
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-backdraft
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ollama-host-disk
+  volumeName: ollama-backdraft-models-pv
+  resources:
+    requests:
+      storage: 200Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-backdraft-0
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-backdraft-0
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ollama-backdraft-0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama-backdraft-0
+        app.kubernetes.io/managed-by: localk8s-bootstrap
+        app.kubernetes.io/part-of: localk8s
+        localk8s.io/ollama-pool: backdraft
+        localk8s.io/ollama-model: gemma2-2b
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        localk8s.io/accelerator: tesla-m10
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.19.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+          ports:
+            - name: http
+              containerPort: 11434
+              hostPort: 11434
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 12Gi
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-models
+          persistentVolumeClaim:
+            claimName: ollama-backdraft-models-hostdisk
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-backdraft-1
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-backdraft-1
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ollama-backdraft-1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama-backdraft-1
+        app.kubernetes.io/managed-by: localk8s-bootstrap
+        app.kubernetes.io/part-of: localk8s
+        localk8s.io/ollama-pool: backdraft
+        localk8s.io/ollama-model: phi4-mini-3b
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        localk8s.io/accelerator: tesla-m10
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.19.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+          ports:
+            - name: http
+              containerPort: 11434
+              hostPort: 11435
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 12Gi
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-models
+          persistentVolumeClaim:
+            claimName: ollama-backdraft-models-hostdisk
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-backdraft-2
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-backdraft-2
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ollama-backdraft-2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama-backdraft-2
+        app.kubernetes.io/managed-by: localk8s-bootstrap
+        app.kubernetes.io/part-of: localk8s
+        localk8s.io/ollama-pool: backdraft
+        localk8s.io/ollama-model: mistral-7b
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        localk8s.io/accelerator: tesla-m10
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.19.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+          ports:
+            - name: http
+              containerPort: 11434
+              hostPort: 11436
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 12Gi
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-models
+          persistentVolumeClaim:
+            claimName: ollama-backdraft-models-hostdisk
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-backdraft-3
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-backdraft-3
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ollama-backdraft-3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama-backdraft-3
+        app.kubernetes.io/managed-by: localk8s-bootstrap
+        app.kubernetes.io/part-of: localk8s
+        localk8s.io/ollama-pool: backdraft
+        localk8s.io/ollama-model: deepseek-r1-7b
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        localk8s.io/accelerator: tesla-m10
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.19.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+          ports:
+            - name: http
+              containerPort: 11434
+              hostPort: 11437
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 12Gi
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-models
+          persistentVolumeClaim:
+            claimName: ollama-backdraft-models-hostdisk
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-backdraft
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-backdraft
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  type: ClusterIP
+  selector:
+    localk8s.io/ollama-pool: backdraft
+  ports:
+    - name: http
+      protocol: TCP
+      port: 11434
+      targetPort: 11434
+---
+# ── Flenser NVIDIA pool ──────────────────────────────────────────────────────
+# Single Ollama pod on flenser (RTX 3060).
+# Uses standard NVIDIA runtime path with runtimeClassName: nvidia.
+# Models loaded on-demand from shared storage.
+# External access: flenser:11438
+# NOTE: PVC/service names keep the historical "amd" suffix to avoid PVC or client churn.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-flenser-models-hostdisk
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-flenser
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ollama-host-disk
+  volumeName: ollama-flenser-models-pv
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-flenser-0
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-flenser-0
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ollama-flenser-0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ollama-flenser-0
+        app.kubernetes.io/managed-by: localk8s-bootstrap
+        app.kubernetes.io/part-of: localk8s
+        localk8s.io/ollama-pool: flenser
+    spec:
+      runtimeClassName: nvidia
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        kubernetes.io/hostname: "flenser"
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.19.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+          ports:
+            - name: http
+              containerPort: 11434
+              hostPort: 11438
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 12Gi
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-models
+          persistentVolumeClaim:
+            claimName: ollama-flenser-models-hostdisk
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-flenser
+  namespace: ollama
+  labels:
+    app.kubernetes.io/name: ollama-flenser
+    app.kubernetes.io/managed-by: localk8s-bootstrap
+    app.kubernetes.io/part-of: localk8s
+spec:
+  type: ClusterIP
+  selector:
+    localk8s.io/ollama-pool: flenser
   ports:
     - name: http
       protocol: TCP

@@ -15,6 +15,7 @@
 - REQ-012: If k3s default runtime is not set to `nvidia`, GPU workload pod specs shall explicitly set `runtimeClassName: nvidia`.
 - REQ-013: The system shall use `scripts/bootstrap.sh` as the only orchestration entrypoint, delegating host setup to Ansible and Helm release management to Helmfile.
 - REQ-014: The system shall provide `scripts/setup.sh` to install and verify host-side bootstrap prerequisites (`ansible-playbook`, `helm`, `helmfile`, `rg`) idempotently.
+- REQ-015: The system shall reserve **200 Gi** of the dedicated model disk for in-cluster Ollama (`/mnt/ollama-models/ollama`) and **200 Gi** on the **`polecat` worker** for Kuzu graph files (`/var/lib/localk8s/kuzu`, local PV with node affinity), declared as managed PersistentVolumes/PersistentVolumeClaims.
 
 ## Data & Interface Contracts (schemas, APIs, persistence, idempotency)
 - Kubernetes interfaces:
